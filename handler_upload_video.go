@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 
 	"crypto/rand"
@@ -16,6 +20,29 @@ import (
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 )
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var stdoutBuff bytes.Buffer
+	cmd.Stdout = &stdoutBuff
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	type FFProbeOut struct {
+		Streams []struct {
+			DisplayAspectRatio string `json:"display_aspect_ratio"`
+		} `json:"streams"`
+	}
+	decoder := json.NewDecoder(&stdoutBuff)
+	var out FFProbeOut
+	if err := decoder.Decode(&out); err != nil {
+		return "", err
+	}
+	if len(out.Streams) < 1 {
+		return "", errors.New("no steams to parse")
+	}
+	return out.Streams[0].DisplayAspectRatio, nil
+}
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
 	const maxUploadSize = 1 << 30
@@ -95,8 +122,23 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Something went wrong", err)
 		return
 	}
+	aspectRatio, err := getVideoAspectRatio(tempVidFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Something went wrong while getting ratio", err)
+		return
+	}
 
-	objectKeyInBucket := base64.RawURLEncoding.EncodeToString(randBytes) + ext
+	videoAspectRatioPrefix := ""
+	switch aspectRatio {
+	case "16:9":
+		videoAspectRatioPrefix = "landscape"
+	case "9:16":
+		videoAspectRatioPrefix = "portrait"
+	default:
+		videoAspectRatioPrefix = "other"
+	}
+
+	objectKeyInBucket := videoAspectRatioPrefix + "/" + base64.RawURLEncoding.EncodeToString(randBytes) + ext
 
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
