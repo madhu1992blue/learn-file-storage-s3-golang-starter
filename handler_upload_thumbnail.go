@@ -48,17 +48,21 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer file.Close()
-	mediaType := header.Header.Get("Content-Type")
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't get video", err)
 		return
 	}
-	ext, err := mime.ExtensionsByType(mediaType)
-	if err != nil || ext == nil {
-		respondWithError(w, http.StatusBadRequest, "No extension detected", err)
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error parsing media type", err)
 		return
 	}
+	if mediaType != "image/png" && mediaType != "image/jpeg" {
+		respondWithError(w, http.StatusBadRequest, "Invalid Image format", err)
+		return
+	}
+	ext, _ := mime.ExtensionsByType(mediaType)
 	thumbnailFileName := filepath.Join(cfg.assetsRoot, videoIDString+ext[0])
 	thumbnailFile, err := os.Create(thumbnailFileName)
 	if err != nil {
